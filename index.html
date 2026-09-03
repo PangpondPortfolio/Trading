@@ -674,6 +674,28 @@
   document.getElementById('editAmountInput').addEventListener('keydown', (e)=>{
     if(e.key === 'Enter') document.getElementById('editSaveBtn').click();
   });
+  // Read-modify-write a single day's entry into its OWN month's storage record.
+  // Always targets the month derived from the edited date (not whatever month
+  // happens to be on screen when the save actually completes), and always
+  // re-fetches the latest saved data right before writing so that quickly
+  // switching months in between doesn't clobber other days' data or land the
+  // entry in the wrong month.
+  async function saveEntryToMonth(y, m, dayKey, entryOrNull){
+    const key = 'month:'+monthKeyOf(y,m);
+    const raw = await storageGet(key);
+    let data = {};
+    if(raw){ try{ data = JSON.parse(raw); }catch(e){ data = {}; } }
+    if(entryOrNull === null){ delete data[dayKey]; } else { data[dayKey] = entryOrNull; }
+    const ok = await storageSet(key, JSON.stringify(data));
+    if(ok && y === state.curYear && m === state.curMonth){
+      // still viewing that month: sync in-memory state + redraw with the
+      // authoritative saved data
+      state.monthData = data;
+      drawCalendarGrid();
+    }
+    return ok;
+  }
+
   document.getElementById('editSaveBtn').addEventListener('click', async ()=>{
     if(!state.editingDate) return;
     const raw = document.getElementById('editAmountInput').value;
@@ -681,22 +703,36 @@
     if(cleaned === '' || cleaned === '-' || cleaned === '+'){ showToast('พิมพ์ตัวเลขก่อนบันทึก'); return; }
     const num = parseFloat(cleaned);
     if(isNaN(num)){ showToast('ตัวเลขไม่ถูกต้อง ลองใหม่อีกครั้ง'); return; }
-    const d = new Date(state.editingDate+'T00:00:00');
+    const editDateStr = state.editingDate;
+    const d = new Date(editDateStr+'T00:00:00');
+    const targetY = d.getFullYear(), targetM = d.getMonth();
     const dayKey = pad2(d.getDate());
-    state.monthData[dayKey] = { total: num };
+
+    // optimistic UI update, only if the edited day belongs to the month
+    // currently on screen
+    if(targetY === state.curYear && targetM === state.curMonth){
+      state.monthData[dayKey] = { total: num };
+      drawCalendarGrid();
+    }
     closeEditSheet();
-    drawCalendarGrid();
-    const ok = await saveMonth(state.curYear, state.curMonth);
+
+    const ok = await saveEntryToMonth(targetY, targetM, dayKey, { total: num });
     if(ok) showToast('บันทึกแล้ว');
   });
   document.getElementById('editDeleteBtn').addEventListener('click', async ()=>{
     if(!state.editingDate) return;
-    const d = new Date(state.editingDate+'T00:00:00');
+    const editDateStr = state.editingDate;
+    const d = new Date(editDateStr+'T00:00:00');
+    const targetY = d.getFullYear(), targetM = d.getMonth();
     const dayKey = pad2(d.getDate());
-    delete state.monthData[dayKey];
+
+    if(targetY === state.curYear && targetM === state.curMonth){
+      delete state.monthData[dayKey];
+      drawCalendarGrid();
+    }
     closeEditSheet();
-    drawCalendarGrid();
-    const ok = await saveMonth(state.curYear, state.curMonth);
+
+    const ok = await saveEntryToMonth(targetY, targetM, dayKey, null);
     if(ok) showToast('ลบยอดแล้ว');
   });
   document.getElementById('editGoLogBtn').addEventListener('click', ()=>{
